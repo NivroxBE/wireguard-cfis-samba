@@ -70,19 +70,16 @@ SAMBA_SHARE_NAME="storagebox"
 SAMBA_SYSTEM_USER="vpnshare"
 CREDENTIALS_FILE="/etc/samba/credentials-storagebox"
 
-log "Detecting public IP and SSH port"
-PUBLIC_IP="$(curl -fsSL --max-time 5 https://ifconfig.me || curl -fsSL --max-time 5 https://icanhazip.com || true)"
+log "VPS network details"
+
+read -r -p "This VPS's public IP (used as WireGuard's WG_HOST): " PUBLIC_IP
 if [[ -z "${PUBLIC_IP}" ]]; then
-  echo "ERROR: could not determine public IP (both ifconfig.me and icanhazip.com timed out/failed)." >&2
+  echo "ERROR: public IP is required." >&2
   exit 1
 fi
-SSH_PORT="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')"
-if [[ -z "${SSH_PORT}" ]]; then
-  SSH_PORT="22"
-  warn "Could not detect sshd's configured port; assuming ${SSH_PORT}. Verify this is correct before relying on the firewall."
-fi
-echo "  Public IP : ${PUBLIC_IP}"
-echo "  SSH port  : ${SSH_PORT}"
+
+read -r -p "SSH port to keep open in the firewall [22]: " SSH_PORT
+SSH_PORT="${SSH_PORT:-22}"
 
 # ---------------------------------------------------------------------------
 # Interactive secrets (never logged, never written into this script/repo)
