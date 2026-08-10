@@ -163,6 +163,16 @@ fi
 # WireGuard via wg-easy (admin UI bound to loopback ONLY)
 # ---------------------------------------------------------------------------
 
+log "Setting host sysctls required for WireGuard routing"
+# Must be set on the HOST, not passed as --sysctl to docker: under
+# --network host there is no separate network namespace for Docker to
+# apply namespaced sysctls to, and it refuses to start with them.
+cat > /etc/sysctl.d/99-wireguard-forward.conf <<EOF
+net.ipv4.ip_forward=1
+net.ipv4.conf.all.src_valid_mark=1
+EOF
+sysctl --system >/dev/null
+
 log "Deploying wg-easy container"
 mkdir -p /opt/wg-easy
 docker rm -f wg-easy >/dev/null 2>&1 || true
@@ -177,8 +187,6 @@ docker run -d \
   --restart unless-stopped \
   --network host \
   --cap-add=NET_ADMIN --cap-add=SYS_MODULE \
-  --sysctl net.ipv4.ip_forward=1 \
-  --sysctl net.ipv4.conf.all.src_valid_mark=1 \
   -v /opt/wg-easy:/etc/wireguard \
   -e WG_HOST="${PUBLIC_IP}" \
   -e WG_PORT="${WG_PORT}" \
@@ -215,11 +223,6 @@ ufw allow "${WG_PORT}"/udp comment 'WireGuard'
 ufw allow from "${WG_SUBNET}" to any port 137,138 proto udp comment 'Samba NetBIOS (VPN clients only)'
 ufw allow from "${WG_SUBNET}" to any port 139,445 proto tcp comment 'Samba (VPN clients only)'
 ufw --force enable
-
-cat > /etc/sysctl.d/99-wireguard-forward.conf <<EOF
-net.ipv4.ip_forward=1
-EOF
-sysctl --system >/dev/null
 
 # ---------------------------------------------------------------------------
 # Mount the Hetzner Storage Box over CIFS
