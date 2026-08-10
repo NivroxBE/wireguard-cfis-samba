@@ -192,7 +192,10 @@ ufw default allow outgoing
 ufw allow "${SSH_PORT}"/tcp comment 'SSH'
 ufw allow "${WG_PORT}"/udp comment 'WireGuard'
 # Samba is intentionally restricted to the VPN subnet only, never public.
-ufw allow from "${WG_SUBNET}" to any port 137,138,139,445 comment 'Samba (VPN clients only)'
+# NetBIOS (137/138) is UDP, session/SMB (139/445) is TCP - ufw needs proto
+# specified explicitly and won't accept a mixed-protocol port list.
+ufw allow from "${WG_SUBNET}" to any port 137,138 proto udp comment 'Samba NetBIOS (VPN clients only)'
+ufw allow from "${WG_SUBNET}" to any port 139,445 proto tcp comment 'Samba (VPN clients only)'
 ufw --force enable
 
 cat > /etc/sysctl.d/99-wireguard-forward.conf <<EOF
