@@ -166,20 +166,38 @@ fi
 log "Deploying wg-easy container"
 mkdir -p /opt/wg-easy
 docker rm -f wg-easy >/dev/null 2>&1 || true
+# --network host is required here: without it, wg0 is created only inside
+# the container's own network namespace and never appears on the host, so
+# host-side Samba (bound to "wg0") would never find that interface. Under
+# host networking, wg-easy's UI listens on the host's 0.0.0.0:${WG_UI_PORT}
+# directly - it is kept loopback-only by ufw's default-deny (no public rule
+# is added for that port below), not by Docker port mapping.
 docker run -d \
   --name=wg-easy \
   --restart unless-stopped \
+  --network host \
   --cap-add=NET_ADMIN --cap-add=SYS_MODULE \
   --sysctl net.ipv4.ip_forward=1 \
   --sysctl net.ipv4.conf.all.src_valid_mark=1 \
   -v /opt/wg-easy:/etc/wireguard \
   -e WG_HOST="${PUBLIC_IP}" \
   -e WG_PORT="${WG_PORT}" \
+  -e PORT="${WG_UI_PORT}" \
   -e WG_DEFAULT_ADDRESS="10.8.0.x" \
   -e PASSWORD="${WG_EASY_PASSWORD}" \
-  -p "127.0.0.1:${WG_UI_PORT}:51821/tcp" \
-  -p "${WG_PORT}:51820/udp" \
   weejewel/wg-easy
+
+log "Waiting for wg0 interface to come up on the host"
+for _ in $(seq 1 30); do
+  if ip link show "${WG_IFACE}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+if ! ip link show "${WG_IFACE}" >/dev/null 2>&1; then
+  echo "ERROR: ${WG_IFACE} did not appear on the host after 30s. Check: docker logs wg-easy" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Firewall: only SSH + WireGuard UDP reachable publicly
@@ -276,6 +294,23 @@ cat > /etc/samba/smb.conf <<EOF
    browsable = yes
    force user = root
 EOF
+
+# Samba is configured to bind only to wg0, which only exists once the
+# wg-easy container (Docker) has started - without this override, a reboot
+# could start smbd/nmbd before wg0 exists and reproduce the same bind
+# failure. Make Samba wait on Docker and give the interface a moment.
+mkdir -p /etc/systemd/system/smbd.service.d /etc/systemd/system/nmbd.service.d
+for svc in smbd nmbd; do
+  cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<EOF
+[Unit]
+After=docker.service
+Requires=docker.service
+
+[Service]
+ExecStartPre=/bin/sh -c 'for i in \$(seq 1 30); do ip link show ${WG_IFACE} >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+EOF
+done
+systemctl daemon-reload
 
 systemctl enable --now smbd nmbd
 systemctl restart smbd nmbd
