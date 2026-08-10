@@ -57,6 +57,16 @@ if ! [[ -f /etc/debian_version ]]; then
   exit 1
 fi
 
+if [[ ! -t 0 ]]; then
+  echo "ERROR: stdin is not an interactive terminal, so the credential prompts below" >&2
+  echo "cannot receive input and the script will hang. This happens in some web-based" >&2
+  echo "terminals (e.g. proxied/websocket terminals) that don't attach a real tty to" >&2
+  echo "the shell session. Try running this over a plain SSH session instead:" >&2
+  echo "  ssh root@<this-vps-ip>" >&2
+  echo "then re-run: bash setup.sh" >&2
+  exit 1
+fi
+
 log() { printf '\n\033[1;32m==>\033[0m %s\n' "$1"; }
 warn() { printf '\n\033[1;33m!!\033[0m %s\n' "$1" >&2; }
 
