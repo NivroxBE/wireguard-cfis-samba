@@ -175,6 +175,12 @@ sysctl --system >/dev/null
 
 log "Deploying wg-easy container"
 mkdir -p /opt/wg-easy
+if [[ ! -d /lib/modules ]]; then
+  warn "/lib/modules does not exist on this host. Some cloud kernels (e.g. Hetzner's) build"
+  warn "WireGuard and netfilter support directly into the kernel rather than as loadable"
+  warn "modules, in which case this is harmless. If the container still fails to create wg0"
+  warn "after this, that's the next thing to investigate (check: uname -r, lsmod | grep wireguard)."
+fi
 docker rm -f wg-easy >/dev/null 2>&1 || true
 # --network host is required here: without it, wg0 is created only inside
 # the container's own network namespace and never appears on the host, so
@@ -187,6 +193,8 @@ docker run -d \
   --restart unless-stopped \
   --network host \
   --cap-add=NET_ADMIN --cap-add=SYS_MODULE \
+  --device=/dev/net/tun \
+  -v /lib/modules:/lib/modules:ro \
   -v /opt/wg-easy:/etc/wireguard \
   -e WG_HOST="${PUBLIC_IP}" \
   -e WG_PORT="${WG_PORT}" \
