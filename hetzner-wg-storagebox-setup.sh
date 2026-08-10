@@ -181,6 +181,14 @@ if [[ ! -d /lib/modules ]]; then
   warn "modules, in which case this is harmless. If the container still fails to create wg0"
   warn "after this, that's the next thing to investigate (check: uname -r, lsmod | grep wireguard)."
 fi
+# Pre-load netfilter modules using the HOST's own modprobe/kmod. The
+# wg-easy image bundles an older kmod that can't decompress modern
+# zstd-compressed kernel modules ("invalid module format"), so it fails
+# to modprobe these itself. Loading them here first means they're already
+# present by the time the container checks, and it skips loading them.
+for mod in ip_tables iptable_nat ip6_tables ip6table_nat; do
+  modprobe "${mod}" 2>/dev/null || true
+done
 docker rm -f wg-easy >/dev/null 2>&1 || true
 # --network host is required here: without it, wg0 is created only inside
 # the container's own network namespace and never appears on the host, so
