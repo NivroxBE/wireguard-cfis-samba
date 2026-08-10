@@ -5,20 +5,29 @@
 #
 # Usage (run as root on a fresh Debian/Ubuntu Hetzner VPS):
 #
+#   IMPORTANT: download the script to a file and run it, do NOT pipe it
+#   straight into bash (`curl ... | bash`). This script prompts for
+#   credentials interactively; when piped, stdin is consumed by the
+#   download itself and every `read` prompt gets no input, which makes
+#   the script hang or silently fail partway through.
+#
 #   Public repo:
-#     curl -fsSL https://raw.githubusercontent.com/NivroxBE/wireguard-cfis-samba/main/hetzner-wg-storagebox-setup.sh | bash
+#     curl -fsSL -o setup.sh https://raw.githubusercontent.com/NivroxBE/wireguard-cfis-samba/main/hetzner-wg-storagebox-setup.sh
+#     bash setup.sh
 #
 #   Private repo (raw URLs need auth - GitHub 404s otherwise):
 #     Generate a short-lived, repo-scoped, read-only fine-grained PAT at
 #     https://github.com/settings/tokens, then:
 #       curl -fsSL -H "Authorization: token <PAT>" \
-#         https://raw.githubusercontent.com/NivroxBE/wireguard-cfis-samba/main/hetzner-wg-storagebox-setup.sh | bash
+#         -o setup.sh https://raw.githubusercontent.com/NivroxBE/wireguard-cfis-samba/main/hetzner-wg-storagebox-setup.sh
+#       bash setup.sh
 #     Revoke the PAT once the run finishes.
 #
 #     Alternative via gh CLI (if installed on the VPS):
 #       gh auth login
 #       gh api repos/NivroxBE/wireguard-cfis-samba/contents/hetzner-wg-storagebox-setup.sh \
-#         --jq '.content' | base64 -d | bash
+#         --jq '.content' | base64 -d > setup.sh
+#       bash setup.sh
 #
 # Security model:
 #   - Only SSH and the WireGuard UDP port are ever exposed publicly.
@@ -62,7 +71,11 @@ SAMBA_SYSTEM_USER="vpnshare"
 CREDENTIALS_FILE="/etc/samba/credentials-storagebox"
 
 log "Detecting public IP and SSH port"
-PUBLIC_IP="$(curl -fsSL https://ifconfig.me || curl -fsSL https://icanhazip.com)"
+PUBLIC_IP="$(curl -fsSL --max-time 5 https://ifconfig.me || curl -fsSL --max-time 5 https://icanhazip.com || true)"
+if [[ -z "${PUBLIC_IP}" ]]; then
+  echo "ERROR: could not determine public IP (both ifconfig.me and icanhazip.com timed out/failed)." >&2
+  exit 1
+fi
 SSH_PORT="$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')"
 if [[ -z "${SSH_PORT}" ]]; then
   SSH_PORT="22"
