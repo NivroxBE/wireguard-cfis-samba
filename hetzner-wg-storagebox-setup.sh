@@ -126,7 +126,7 @@ fi
 read -r -s -p "Samba share password for VPN clients (leave blank to auto-generate): " SMB_SHARE_PASS
 echo
 if [[ -z "${SMB_SHARE_PASS}" ]]; then
-  SMB_SHARE_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)"
+  SMB_SHARE_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)" || true
   echo "  Generated Samba share password: ${SMB_SHARE_PASS}"
   echo "  (save this now - it will also be printed in the final summary)"
 fi
