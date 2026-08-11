@@ -330,7 +330,12 @@ After=docker.service
 Requires=docker.service
 
 [Service]
-ExecStartPre=/bin/sh -c 'for i in \$(seq 1 30); do ip link show ${WG_IFACE} >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+# Waiting for the link to exist isn't enough: wg-easy brings wg0 up before
+# assigning it an address, and if smbd starts in that gap it resolves
+# "interfaces = lo ${WG_IFACE}" against an address-less wg0 and silently
+# binds only to lo, never picking up ${WG_IFACE} even after the address
+# appears. Wait for the address itself, not just the link.
+ExecStartPre=/bin/sh -c 'for i in \$(seq 1 30); do ip -4 addr show ${WG_IFACE} | grep -q "inet " && exit 0; sleep 1; done; exit 1'
 EOF
 done
 systemctl daemon-reload
