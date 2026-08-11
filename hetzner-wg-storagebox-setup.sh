@@ -300,8 +300,13 @@ cat > /etc/samba/smb.conf <<EOF
    security = user
    map to guest = never
    # Core lockdown: only ever listen on the WireGuard interface, never
-   # the public NIC, regardless of what firewall rules also say.
-   interfaces = lo ${WG_IFACE}
+   # the public NIC, regardless of what firewall rules also say. Specified
+   # by IP/CIDR rather than interface name: Samba's name-based interface
+   # detection relies on OS-reported broadcast/netmask info, which WireGuard's
+   # point-to-point interface (no broadcast) doesn't provide - smbd silently
+   # skips it and binds only to lo. Binding by address instead bypasses that
+   # detection entirely and works regardless of the interface's flags.
+   interfaces = 127.0.0.1 ${WG_HOST_ADDR}/24
    bind interfaces only = yes
    log file = /var/log/samba/log.%m
    max log size = 1000
