@@ -234,9 +234,9 @@ ufw default allow outgoing
 ufw allow "${SSH_PORT}"/tcp comment 'SSH'
 ufw allow "${WG_PORT}"/udp comment 'WireGuard'
 # Samba is intentionally restricted to the VPN subnet only, never public.
-# NetBIOS (137/138) is UDP, session/SMB (139/445) is TCP - ufw needs proto
-# specified explicitly and won't accept a mixed-protocol port list.
-ufw allow from "${WG_SUBNET}" to any port 137,138 proto udp comment 'Samba NetBIOS (VPN clients only)'
+# Only smbd's ports are opened - nmbd (NetBIOS, 137/138) is not run at all,
+# since WireGuard interfaces are point-to-point and don't support the
+# broadcast sockets nmbd needs; clients connect by IP, not NetBIOS name.
 ufw allow from "${WG_SUBNET}" to any port 139,445 proto tcp comment 'Samba (VPN clients only)'
 ufw --force enable
 
@@ -316,10 +316,14 @@ EOF
 
 # Samba is configured to bind only to wg0, which only exists once the
 # wg-easy container (Docker) has started - without this override, a reboot
-# could start smbd/nmbd before wg0 exists and reproduce the same bind
-# failure. Make Samba wait on Docker and give the interface a moment.
-mkdir -p /etc/systemd/system/smbd.service.d /etc/systemd/system/nmbd.service.d
-for svc in smbd nmbd; do
+# could start smbd before wg0 exists and reproduce the same bind failure.
+# Make Samba wait on Docker and give the interface a moment.
+# nmbd is intentionally not run: it needs a broadcast-capable interface for
+# NetBIOS, which wg0 (point-to-point) can't provide, so it just times out
+# on startup. Clients connect by IP, so NetBIOS is not needed anyway.
+systemctl disable --now nmbd >/dev/null 2>&1 || true
+mkdir -p /etc/systemd/system/smbd.service.d
+for svc in smbd; do
   cat > "/etc/systemd/system/${svc}.service.d/override.conf" <<EOF
 [Unit]
 After=docker.service
@@ -331,8 +335,8 @@ EOF
 done
 systemctl daemon-reload
 
-systemctl enable --now smbd nmbd
-systemctl restart smbd nmbd
+systemctl enable --now smbd
+systemctl restart smbd
 
 # ---------------------------------------------------------------------------
 # Summary
