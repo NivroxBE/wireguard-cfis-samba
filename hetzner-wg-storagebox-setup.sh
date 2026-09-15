@@ -80,6 +80,17 @@ SAMBA_SHARE_NAME="storagebox"
 SAMBA_SYSTEM_USER="vpnshare"
 CREDENTIALS_FILE="/etc/samba/credentials-storagebox"
 
+# Second, restricted share backed by a separate Hetzner Storage Box
+# subaccount (its own home directory on the box, its own SMB credentials).
+# This gives folder-level separation enforced at the Storage Box itself,
+# not just by this VPS's smb.conf: a shared login that only ever sees its
+# own subdirectory of the box, distinct from the full-access superuser
+# share above.
+GREENTHING_MOUNT="/mnt/storagebox-greenthing"
+GREENTHING_SAMBA_SHARE_NAME="greenthing"
+GREENTHING_SAMBA_USER="greenthing"
+GREENTHING_CREDENTIALS_FILE="/etc/samba/credentials-greenthing"
+
 log "VPS network details"
 
 read -r -p "This VPS's public IP (used as WireGuard's WG_HOST): " PUBLIC_IP
@@ -128,6 +139,29 @@ echo
 if [[ -z "${SMB_SHARE_PASS}" ]]; then
   SMB_SHARE_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)" || true
   echo "  Generated Samba share password: ${SMB_SHARE_PASS}"
+  echo "  (save this now - it will also be printed in the final summary)"
+fi
+
+log "Collecting 'greenthing' subaccount and share credentials (input hidden)"
+
+read -r -p "Greenthing Storage Box subaccount hostname [u648591-sub1.your-storagebox.de]: " GREENTHING_HOST
+GREENTHING_HOST="${GREENTHING_HOST:-u648591-sub1.your-storagebox.de}"
+
+read -r -p "Greenthing Storage Box subaccount username [u648591-sub1]: " GREENTHING_USER
+GREENTHING_USER="${GREENTHING_USER:-u648591-sub1}"
+
+read -r -s -p "Greenthing Storage Box subaccount password: " GREENTHING_PASS
+echo
+if [[ -z "${GREENTHING_PASS}" ]]; then
+  echo "ERROR: greenthing subaccount password is required." >&2
+  exit 1
+fi
+
+read -r -s -p "Samba share password for the shared 'greenthing' login (leave blank to auto-generate): " GREENTHING_SHARE_PASS
+echo
+if [[ -z "${GREENTHING_SHARE_PASS}" ]]; then
+  GREENTHING_SHARE_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)" || true
+  echo "  Generated greenthing Samba share password: ${GREENTHING_SHARE_PASS}"
   echo "  (save this now - it will also be printed in the final summary)"
 fi
 
@@ -279,6 +313,41 @@ if ! mountpoint -q "${STORAGEBOX_MOUNT}"; then
 fi
 echo "  Mounted //${STORAGEBOX_HOST}/backup -> ${STORAGEBOX_MOUNT}"
 
+log "Mounting the 'greenthing' Storage Box subaccount via CIFS"
+mkdir -p "${GREENTHING_MOUNT}"
+
+cat > "${GREENTHING_CREDENTIALS_FILE}" <<EOF
+username=${GREENTHING_USER}
+password=${GREENTHING_PASS}
+EOF
+chmod 600 "${GREENTHING_CREDENTIALS_FILE}"
+
+cat > /etc/systemd/system/mnt-storagebox-greenthing.mount <<EOF
+[Unit]
+Description=Hetzner Storage Box - greenthing subaccount (CIFS)
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=//${GREENTHING_HOST}/${GREENTHING_USER}
+Where=${GREENTHING_MOUNT}
+Type=cifs
+Options=credentials=${GREENTHING_CREDENTIALS_FILE},vers=3.0,uid=root,gid=root,iocharset=utf8,file_mode=0770,dir_mode=0770
+TimeoutSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now mnt-storagebox-greenthing.mount
+
+if ! mountpoint -q "${GREENTHING_MOUNT}"; then
+  echo "ERROR: greenthing subaccount failed to mount at ${GREENTHING_MOUNT}. Check its credentials and that SMB is allowed on that subaccount." >&2
+  exit 1
+fi
+echo "  Mounted //${GREENTHING_HOST}/${GREENTHING_USER} -> ${GREENTHING_MOUNT}"
+
 # ---------------------------------------------------------------------------
 # Samba re-share, bound to wg0 ONLY
 # ---------------------------------------------------------------------------
@@ -290,6 +359,12 @@ if ! id "${SAMBA_SYSTEM_USER}" >/dev/null 2>&1; then
 fi
 printf '%s\n%s\n' "${SMB_SHARE_PASS}" "${SMB_SHARE_PASS}" | smbpasswd -a -s "${SAMBA_SYSTEM_USER}"
 smbpasswd -e "${SAMBA_SYSTEM_USER}"
+
+if ! id "${GREENTHING_SAMBA_USER}" >/dev/null 2>&1; then
+  useradd --system --no-create-home --shell /usr/sbin/nologin "${GREENTHING_SAMBA_USER}"
+fi
+printf '%s\n%s\n' "${GREENTHING_SHARE_PASS}" "${GREENTHING_SHARE_PASS}" | smbpasswd -a -s "${GREENTHING_SAMBA_USER}"
+smbpasswd -e "${GREENTHING_SAMBA_USER}"
 
 cp -n /etc/samba/smb.conf /etc/samba/smb.conf.orig 2>/dev/null || true
 
@@ -314,6 +389,13 @@ cat > /etc/samba/smb.conf <<EOF
 [${SAMBA_SHARE_NAME}]
    path = ${STORAGEBOX_MOUNT}
    valid users = ${SAMBA_SYSTEM_USER}
+   read only = no
+   browsable = yes
+   force user = root
+
+[${GREENTHING_SAMBA_SHARE_NAME}]
+   path = ${GREENTHING_MOUNT}
+   valid users = ${GREENTHING_SAMBA_USER}
    read only = no
    browsable = yes
    force user = root
@@ -374,6 +456,16 @@ Once connected via WireGuard, map the network drive:
 
   Samba login user : ${SAMBA_SYSTEM_USER}
   Samba login pass : ${SMB_SHARE_PASS}
+  (also written nowhere else - copy it now)
+
+Restricted 'greenthing' share (full-access superuser above can also see this
+folder inside the main share's mount; this login can ONLY see this folder):
+  Windows : \\\\${WG_HOST_ADDR}\\${GREENTHING_SAMBA_SHARE_NAME}
+  macOS   : smb://${WG_HOST_ADDR}/${GREENTHING_SAMBA_SHARE_NAME}
+  Linux   : mount -t cifs //${WG_HOST_ADDR}/${GREENTHING_SAMBA_SHARE_NAME} <mountpoint> -o username=${GREENTHING_SAMBA_USER}
+
+  Samba login user : ${GREENTHING_SAMBA_USER}
+  Samba login pass : ${GREENTHING_SHARE_PASS}
   (also written nowhere else - copy it now)
 
 Exposed publicly  : SSH (${SSH_PORT}/tcp), WireGuard (${WG_PORT}/udp) only.
